@@ -984,66 +984,29 @@ defmodule Phoenix.LiveView.Channel do
       {:ok, %Session{} = verified} ->
         %Phoenix.Socket{private: %{connect_info: connect_info}} = phx_socket
 
-        case connect_info do
-          %{session: nil} ->
-            Logger.debug("""
-            LiveView session was misconfigured or the user token is outdated.
+        connect_info = put_in(connect_info[:session], connect_info[:session] || %{})
 
-            1) Ensure your session configuration in your endpoint is in a module attribute:
-
-                @session_options [
-                  ...
-                ]
-
-            2) Change the `plug Plug.Session` to use said attribute:
-
-                plug Plug.Session, @session_options
-
-            3) Also pass the `@session_options` to your LiveView socket:
-
-                socket "/live", Phoenix.LiveView.Socket,
-                  websocket: [connect_info: [session: @session_options]]
-
-            4) Ensure the `protect_from_forgery` plug is in your router pipeline:
-
-                plug :protect_from_forgery
-
-            5) Define the CSRF meta tag inside the `<head>` tag in your layout:
-
-                <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
-
-            6) Pass it forward in your app.js:
-
-                let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
-                let liveSocket = new LiveSocket("/live", Socket, {params: {_csrf_token: csrfToken}});
-            """)
-
-            GenServer.reply(from, {:error, %{reason: "stale"}})
+        with {:ok, %Session{view: view} = new_verified, route, url} <-
+               authorize_session(verified, endpoint, params),
+             {:ok, config} <- load_live_view(view) do
+          verified_mount(
+            new_verified,
+            config,
+            route,
+            url,
+            params,
+            from,
+            phx_socket,
+            connect_info
+          )
+        else
+          {:error, :unauthorized} ->
+            GenServer.reply(from, {:error, %{reason: "unauthorized"}})
             {:stop, :shutdown, :no_state}
 
-          %{} ->
-            with {:ok, %Session{view: view} = new_verified, route, url} <-
-                   authorize_session(verified, endpoint, params),
-                 {:ok, config} <- load_live_view(view) do
-              verified_mount(
-                new_verified,
-                config,
-                route,
-                url,
-                params,
-                from,
-                phx_socket,
-                connect_info
-              )
-            else
-              {:error, :unauthorized} ->
-                GenServer.reply(from, {:error, %{reason: "unauthorized"}})
-                {:stop, :shutdown, :no_state}
-
-              {:error, _reason} ->
-                GenServer.reply(from, {:error, %{reason: "stale"}})
-                {:stop, :shutdown, :no_state}
-            end
+          {:error, _reason} ->
+            GenServer.reply(from, {:error, %{reason: "stale"}})
+            {:stop, :shutdown, :no_state}
         end
 
       {:error, _reason} ->
